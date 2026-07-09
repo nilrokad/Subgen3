@@ -26,7 +26,7 @@ const upload = multer({
 
 // Initialize AssemblyAI
 const client = new AssemblyAI({
-  apiKey: 'a21a8eb91b4a484a831c91cab53e99a5',
+  apiKey: 'a1b261abc263427588c223f1547d5b58',
 });
 
 async function startServer() {

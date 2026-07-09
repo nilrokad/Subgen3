@@ -46,7 +46,6 @@ interface QueueItem {
   id: string;
   file: File;
   fileId?: string;
-  assemblyUploadUrl?: string;
   isUploading?: boolean;
   status: 'pending' | 'waiting' | 'transcribing' | 'gemini-crafting' | 'completed' | 'error';
   result?: TranscriptionResult;
@@ -126,7 +125,7 @@ function cleanAndParseJSON(text: string): { srt: string, correctedText: string }
 
 async function repairJSONWithGemini(rawText: string, modelName: string = "gemini-3.5-flash"): Promise<{ srt: string, correctedText: string }> {
   try {
-    const ai = new GoogleGenAI({ apiKey: "AIzaSyDxKeT9qVM_zEi5AM81wR5QfAYkehwQkRU" });
+    const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || '' });
     const repairPrompt = `
       You are a JSON recovery agent. You received a malformed JSON string representing subtitles data, which failed to parse due to unexpected characters, unescaped newlines/quotes, or extra non-JSON text.
       
@@ -342,7 +341,7 @@ export default function App() {
 
   const generateSRTWithGemini = async (words: Word[], fileName: string, file: File, translateToHinglish: boolean, userSegments: string | null = null, fillGap: boolean = false, modelName: string = "gemini-3.5-flash", customPrompt: string = ""): Promise<{ srt: string, correctedText: string }> => {
     try {
-      const ai = new GoogleGenAI({ apiKey: "AIzaSyDxKeT9qVM_zEi5AM81wR5QfAYkehwQkRU" });
+      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || '' });
 
       let parts: any[] = [];
       let prompt = '';
@@ -571,7 +570,7 @@ export default function App() {
   // Background Uploader
   useEffect(() => {
     const uploadPendingFiles = async () => {
-      const itemsToUpload = queue.filter(q => q.status === 'pending' && !q.fileId && !q.assemblyUploadUrl && !q.isUploading);
+      const itemsToUpload = queue.filter(q => q.status === 'pending' && !q.fileId && !q.isUploading);
       
       if (itemsToUpload.length === 0) return;
 
@@ -583,48 +582,18 @@ export default function App() {
         const formData = new FormData();
         formData.append('audio', item.file);
 
-        let fileId: string | undefined;
-        try {
-          const response = await fetch('/api/upload', {
-            method: 'POST',
-            body: formData,
-          });
+        const response = await fetch('/api/upload', {
+          method: 'POST',
+          body: formData,
+        });
 
-          if (response.ok) {
-            const data = await response.json();
-            fileId = data.fileId;
-          }
-        } catch (serverUploadErr) {
-          console.warn("Server upload failed, will fallback to direct AssemblyAI upload:", serverUploadErr);
-        }
-
-        if (fileId) {
-          setQueue(prev => prev.map(q => q.id === item.id ? { ...q, fileId, isUploading: false } : q));
-        } else {
-          // Fall back to direct client-side AssemblyAI upload
-          console.log("Uploading file directly from browser to AssemblyAI...");
-          const uploadResponse = await fetch('https://api.assemblyai.com/v2/upload', {
-            method: 'POST',
-            headers: {
-              'authorization': 'a21a8eb91b4a484a831c91cab53e99a5',
-              'content-type': 'application/octet-stream'
-            },
-            body: item.file
-          });
-
-          if (!uploadResponse.ok) {
-            throw new Error(`Direct AssemblyAI upload failed: ${uploadResponse.statusText}`);
-          }
-
-          const uploadResult = await uploadResponse.json();
-          const assemblyUploadUrl = uploadResult.upload_url;
-          console.log("Direct AssemblyAI upload successful. URL:", assemblyUploadUrl);
-
-          setQueue(prev => prev.map(q => q.id === item.id ? { ...q, assemblyUploadUrl, isUploading: false } : q));
-        }
-      } catch (error: any) {
-        console.error(`Failed to upload ${item.file.name}:`, error);
-        setQueue(prev => prev.map(q => q.id === item.id ? { ...q, isUploading: false, status: 'error', error: error.message || 'Failed to save or upload file.' } : q));
+        if (!response.ok) throw new Error('Upload failed');
+        const data = await response.json();
+        
+        setQueue(prev => prev.map(q => q.id === item.id ? { ...q, fileId: data.fileId, isUploading: false } : q));
+      } catch (error) {
+        console.error(`Failed to upload ${item.file.name} to temp storage:`, error);
+        setQueue(prev => prev.map(q => q.id === item.id ? { ...q, isUploading: false, status: 'error', error: 'Failed to save to server.' } : q));
       }
     };
 
@@ -667,199 +636,88 @@ export default function App() {
       setElapsedTimers(prev => ({ ...prev, [item.id]: 0 }));
 
       try {
-        // 2. UPLOADING TO ASSEMBLY AI (via our server or direct)
-        updateStep(item.id, 'upload', 'active');
-        
-        let data = null;
-        
-        if (item.assemblyUploadUrl) {
-          // Direct browser AssemblyAI connection
-          await new Promise(resolve => setTimeout(resolve, 500)); // slight UI delay
-          updateStep(item.id, 'upload', 'completed');
+      // 2. UPLOADING TO ASSEMBLY AI (via our server)
+      updateStep(item.id, 'upload', 'active');
+      
+      if (!item.fileId) {
+         throw new Error("File hasn't been uploaded to temp drive yet. Please wait.");
+      }
 
-          // 3. ASSEMBLYAI TRANSCRIPTION
-          updateStep(item.id, 'transcribe', 'active');
-          console.log("Submitting directly to AssemblyAI from browser...");
-          
-          let transcriptId = '';
-          let modelToUse = 'universal-2';
-          let submitRetries = 2;
-          
-          while (submitRetries > 0) {
-            try {
-              const transcribeResponse = await fetch('https://api.assemblyai.com/v2/transcript', {
-                method: 'POST',
-                headers: {
-                  'authorization': 'a21a8eb91b4a484a831c91cab53e99a5',
-                  'content-type': 'application/json'
-                },
-                body: JSON.stringify({
-                  audio_url: item.assemblyUploadUrl,
-                  speech_models: [modelToUse],
-                  language_detection: true
-                })
-              });
+      const response = await fetch('/api/transcribe', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ fileId: item.fileId, fileName: item.file.name }),
+      });
 
-              if (!transcribeResponse.ok) {
-                throw new Error(`Direct submit response failed: ${transcribeResponse.statusText}`);
-              }
-
-              const transcribeResult = await transcribeResponse.json();
-              transcriptId = transcribeResult.id;
-              break;
-            } catch (err: any) {
-              submitRetries--;
-              console.warn(`AssemblyAI client submit failed with ${modelToUse}. Retries left: ${submitRetries}`, err);
-              if (modelToUse === 'universal-2') {
-                modelToUse = 'universal-3-5-pro';
-              }
-              if (submitRetries === 0) {
-                throw err;
-              }
-              await new Promise(r => setTimeout(r, 2000));
-            }
+      const contentType = response.headers.get("content-type");
+      if (!response.ok) {
+        let errorMessage = 'Transcription failed';
+        if (contentType && contentType.includes("application/json")) {
+          try {
+            const errData = await response.json();
+            errorMessage = errData.message || errData.error || errorMessage;
+          } catch (e) {
+            errorMessage = `Server error (${response.status}): ${response.statusText}`;
           }
-
-          console.log("AssemblyAI client transcription submitted. ID:", transcriptId);
-
-          // Polling AssemblyAI directly from browser
-          let pollRetries = 0;
-          while (true) {
-            try {
-              const statusResponse = await fetch(`https://api.assemblyai.com/v2/transcript/${transcriptId}`, {
-                method: 'GET',
-                headers: {
-                  'authorization': 'a21a8eb91b4a484a831c91cab53e99a5'
-                }
-              });
-
-              if (!statusResponse.ok) {
-                throw new Error(`Status check failed: ${statusResponse.statusText}`);
-              }
-
-              const statusData = await statusResponse.json();
-              if (statusData.status === 'completed') {
-                // Fetch sentences and paragraphs directly from AssemblyAI
-                const [sentencesResponse, paragraphsResponse] = await Promise.all([
-                  fetch(`https://api.assemblyai.com/v2/transcript/${transcriptId}/sentences`, {
-                    method: 'GET',
-                    headers: { 'authorization': 'a21a8eb91b4a484a831c91cab53e99a5' }
-                  }),
-                  fetch(`https://api.assemblyai.com/v2/transcript/${transcriptId}/paragraphs`, {
-                    method: 'GET',
-                    headers: { 'authorization': 'a21a8eb91b4a484a831c91cab53e99a5' }
-                  })
-                ]);
-
-                const sentencesData = sentencesResponse.ok ? await sentencesResponse.json() : { sentences: [] };
-                const paragraphsData = paragraphsResponse.ok ? await paragraphsResponse.json() : { paragraphs: [] };
-
-                data = {
-                  id: statusData.id,
-                  text: statusData.text,
-                  words: statusData.words || [],
-                  sentences: sentencesData.sentences || [],
-                  paragraphs: paragraphsData.paragraphs || []
-                };
-                break;
-              } else if (statusData.status === 'error') {
-                throw new Error(statusData.error || "Transcription failed");
-              }
-
-              pollRetries = 0;
-            } catch (pollErr) {
-              console.warn("Client polling error, retrying...", pollErr);
-              pollRetries++;
-              if (pollRetries > 10) {
-                throw new Error("Lost connection to AssemblyAI while polling status. Please try again.");
-              }
-            }
-            await new Promise(resolve => setTimeout(resolve, 3000));
-          }
-
-          if (!data) throw new Error("No transcription data received from AssemblyAI");
-          updateStep(item.id, 'transcribe', 'completed');
         } else {
-          // Legacy / Server-side transcription
-          if (!item.fileId) {
-             throw new Error("File hasn't been uploaded to temp drive yet. Please wait.");
+          errorMessage = `Server error (${response.status}): ${response.statusText}`;
+        }
+        updateStep(item.id, 'upload', 'error');
+        throw new Error(errorMessage);
+      }
+      
+      if (!contentType || !contentType.includes("application/json")) {
+        const textResponse = await response.text();
+        console.error("Received non-JSON response from /api/transcribe. Body format:", textResponse.substring(0, 200));
+        updateStep(item.id, 'upload', 'error');
+        throw new Error(`Server returned unexpected format (${contentType}). Please try processing this file again.`);
+      }
+
+      updateStep(item.id, 'upload', 'completed');
+
+      // 3. ASSEMBLYAI TRANSCRIPTION
+      updateStep(item.id, 'transcribe', 'active');
+      const transcribeData = await response.json();
+      const transcriptId = transcribeData.id;
+
+      let data = null;
+      let pollRetries = 0;
+      while (true) {
+        try {
+          const statusResponse = await fetch(`/api/status/${transcriptId}`);
+          const statusContentType = statusResponse.headers.get("content-type");
+          
+          if (!statusContentType || !statusContentType.includes("application/json")) {
+            throw new Error("Invalid content type received during polling");
           }
 
-          const response = await fetch('/api/transcribe', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({ fileId: item.fileId, fileName: item.file.name }),
-          });
-
-          const contentType = response.headers.get("content-type");
-          if (!response.ok) {
-            let errorMessage = 'Transcription failed';
-            if (contentType && contentType.includes("application/json")) {
-              try {
-                const errData = await response.json();
-                errorMessage = errData.message || errData.error || errorMessage;
-              } catch (e) {
-                errorMessage = `Server error (${response.status}): ${response.statusText}`;
-              }
-            } else {
-              errorMessage = `Server error (${response.status}): ${response.statusText}`;
-            }
-            updateStep(item.id, 'upload', 'error');
-            throw new Error(errorMessage);
+          if (!statusResponse.ok) {
+            throw new Error(`Status check failed: ${statusResponse.statusText}`);
           }
           
-          if (!contentType || !contentType.includes("application/json")) {
-            const textResponse = await response.text();
-            console.error("Received non-JSON response from /api/transcribe. Body format:", textResponse.substring(0, 200));
-            updateStep(item.id, 'upload', 'error');
-            throw new Error(`Server returned unexpected format (${contentType}). Please try processing this file again.`);
+          const statusData = await statusResponse.json();
+          if (statusData.status === 'completed') {
+            data = statusData.result;
+            break;
+          } else if (statusData.status === 'error') {
+            throw new Error(statusData.error || "Transcription failed");
           }
-
-          updateStep(item.id, 'upload', 'completed');
-
-          // 3. ASSEMBLYAI TRANSCRIPTION
-          updateStep(item.id, 'transcribe', 'active');
-          const transcribeData = await response.json();
-          const transcriptId = transcribeData.id;
-
-          let pollRetries = 0;
-          while (true) {
-            try {
-              const statusResponse = await fetch(`/api/status/${transcriptId}`);
-              const statusContentType = statusResponse.headers.get("content-type");
-              
-              if (!statusContentType || !statusContentType.includes("application/json")) {
-                throw new Error("Invalid content type received during polling");
-              }
-
-              if (!statusResponse.ok) {
-                throw new Error(`Status check failed: ${statusResponse.statusText}`);
-              }
-              
-              const statusData = await statusResponse.json();
-              if (statusData.status === 'completed') {
-                data = statusData.result;
-                break;
-              } else if (statusData.status === 'error') {
-                throw new Error(statusData.error || "Transcription failed");
-              }
-              
-              pollRetries = 0; 
-            } catch (pollErr) {
-              console.warn("Polling error, retrying...", pollErr);
-              pollRetries++;
-              if (pollRetries > 10) {
-                throw new Error("Lost connection to server while polling status. Please try again.");
-              }
-            }
-            await new Promise(resolve => setTimeout(resolve, 3000));
+          
+          pollRetries = 0; 
+        } catch (pollErr) {
+          console.warn("Polling error, retrying...", pollErr);
+          pollRetries++;
+          if (pollRetries > 10) {
+            throw new Error("Lost connection to server while polling status. Please try again.");
           }
-
-          if (!data) throw new Error("No transcription data received");
-          updateStep(item.id, 'transcribe', 'completed');
         }
+        await new Promise(resolve => setTimeout(resolve, 3000));
+      }
+
+      if (!data) throw new Error("No transcription data received");
+      updateStep(item.id, 'transcribe', 'completed');
       
       // 4. GEMINI CRAFTING
       updateStep(item.id, 'gemini', 'active');
