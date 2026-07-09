@@ -1,0 +1,5 @@
+{
+  "name": "SubGen 3.0",
+  "description": "Generate accurate SRT subtitles from audio files using AssemblyAI.",
+  "requestFramePermissions": []
+}
