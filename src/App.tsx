@@ -125,7 +125,7 @@ function cleanAndParseJSON(text: string): { srt: string, correctedText: string }
 
 async function repairJSONWithGemini(rawText: string, modelName: string = "gemini-3.5-flash"): Promise<{ srt: string, correctedText: string }> {
   try {
-    const ai = new GoogleGenAI({ apiKey: "AIzaSyDxKeT9qVM_zEi5AM81wR5QfAYkehwQkRU" });
+    const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || '' });
     const repairPrompt = `
       You are a JSON recovery agent. You received a malformed JSON string representing subtitles data, which failed to parse due to unexpected characters, unescaped newlines/quotes, or extra non-JSON text.
       
@@ -341,7 +341,7 @@ export default function App() {
 
   const generateSRTWithGemini = async (words: Word[], fileName: string, file: File, translateToHinglish: boolean, userSegments: string | null = null, fillGap: boolean = false, modelName: string = "gemini-3.5-flash", customPrompt: string = ""): Promise<{ srt: string, correctedText: string }> => {
     try {
-      const ai = new GoogleGenAI({ apiKey: "AIzaSyDxKeT9qVM_zEi5AM81wR5QfAYkehwQkRU" });
+      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || '' });
 
       let parts: any[] = [];
       let prompt = '';
