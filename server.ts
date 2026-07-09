@@ -26,7 +26,7 @@ const upload = multer({
 
 // Initialize AssemblyAI
 const client = new AssemblyAI({
-  apiKey: 'a1b261abc263427588c223f1547d5b58',
+  apiKey: 'a21a8eb91b4a484a831c91cab53e99a5',
 });
 
 async function startServer() {
@@ -58,20 +58,12 @@ async function startServer() {
         return res.status(400).json({ error: 'No fileId provided' });
       }
 
-      let audioSource: string;
-      const isRemoteUrl = fileId.startsWith('http://') || fileId.startsWith('https://');
-
-      if (isRemoteUrl) {
-        audioSource = fileId;
-      } else {
-        const filePath = path.join(uploadDir, fileId);
-        if (!fs.existsSync(filePath)) {
-           return res.status(404).json({ error: 'File not found on server' });
-        }
-        audioSource = filePath;
+      const filePath = path.join(uploadDir, fileId);
+      if (!fs.existsSync(filePath)) {
+         return res.status(404).json({ error: 'File not found on server' });
       }
 
-      console.log('Starting transcription for:', fileName, 'using source:', isRemoteUrl ? 'Remote URL' : 'Temp File');
+      console.log('Starting transcription for:', fileName, 'using temp file:', fileId);
 
       try {
         console.log('Submitting to AssemblyAI...');
@@ -83,7 +75,7 @@ async function startServer() {
           try {
             console.log(`Submitting to AssemblyAI using model: ${modelToUse}...`);
             transcript = await client.transcripts.submit({
-              audio: audioSource,
+              audio: filePath,
               speech_models: [modelToUse],
               language_detection: true,
             });
@@ -117,11 +109,8 @@ async function startServer() {
         });
       } finally {
         // Clean up uploaded file from temp queue after successful submission to Assembly AI
-        if (!isRemoteUrl) {
-          const filePath = path.join(uploadDir, fileId);
-          if (fs.existsSync(filePath)) {
-            fs.unlinkSync(filePath);
-          }
+        if (fs.existsSync(filePath)) {
+          fs.unlinkSync(filePath);
         }
       }
     } catch (error: any) {
