@@ -2,6 +2,8 @@ import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { Upload, FileAudio, Download, Loader2, CheckCircle, AlertCircle, FileText, Sparkles, List, AlignLeft, Type, Files, X, Clock, Play, Pause, Sun, Moon } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { GoogleGenAI } from "@google/genai";
+import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
+import { storage } from './firebase';
 
 interface Word {
   text: string;
@@ -579,20 +581,15 @@ export default function App() {
       setQueue(prev => prev.map(q => q.id === item.id ? { ...q, isUploading: true } : q));
       
       try {
-        const formData = new FormData();
-        formData.append('audio', item.file);
-
-        const response = await fetch('/api/upload', {
-          method: 'POST',
-          body: formData,
-        });
-
-        if (!response.ok) throw new Error('Upload failed');
-        const data = await response.json();
+        console.log(`Starting Firebase Storage upload for ${item.file.name}...`);
+        const fileRef = ref(storage, `audios/${Date.now()}_${item.file.name}`);
+        const uploadResult = await uploadBytes(fileRef, item.file);
+        const downloadUrl = await getDownloadURL(uploadResult.ref);
         
-        setQueue(prev => prev.map(q => q.id === item.id ? { ...q, fileId: data.fileId, isUploading: false } : q));
+        console.log(`Firebase Storage upload completed successfully! Download URL:`, downloadUrl);
+        setQueue(prev => prev.map(q => q.id === item.id ? { ...q, fileId: downloadUrl, isUploading: false } : q));
       } catch (error) {
-        console.error(`Failed to upload ${item.file.name} to temp storage:`, error);
+        console.error(`Failed to upload ${item.file.name} to Firebase Storage:`, error);
         setQueue(prev => prev.map(q => q.id === item.id ? { ...q, isUploading: false, status: 'error', error: 'Failed to save to server.' } : q));
       }
     };

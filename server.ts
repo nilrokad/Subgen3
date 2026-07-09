@@ -58,12 +58,20 @@ async function startServer() {
         return res.status(400).json({ error: 'No fileId provided' });
       }
 
-      const filePath = path.join(uploadDir, fileId);
-      if (!fs.existsSync(filePath)) {
-         return res.status(404).json({ error: 'File not found on server' });
+      let audioSource: string;
+      const isRemoteUrl = fileId.startsWith('http://') || fileId.startsWith('https://');
+
+      if (isRemoteUrl) {
+        audioSource = fileId;
+      } else {
+        const filePath = path.join(uploadDir, fileId);
+        if (!fs.existsSync(filePath)) {
+           return res.status(404).json({ error: 'File not found on server' });
+        }
+        audioSource = filePath;
       }
 
-      console.log('Starting transcription for:', fileName, 'using temp file:', fileId);
+      console.log('Starting transcription for:', fileName, 'using source:', isRemoteUrl ? 'Remote URL' : 'Temp File');
 
       try {
         console.log('Submitting to AssemblyAI...');
@@ -75,7 +83,7 @@ async function startServer() {
           try {
             console.log(`Submitting to AssemblyAI using model: ${modelToUse}...`);
             transcript = await client.transcripts.submit({
-              audio: filePath,
+              audio: audioSource,
               speech_models: [modelToUse],
               language_detection: true,
             });
@@ -109,8 +117,11 @@ async function startServer() {
         });
       } finally {
         // Clean up uploaded file from temp queue after successful submission to Assembly AI
-        if (fs.existsSync(filePath)) {
-          fs.unlinkSync(filePath);
+        if (!isRemoteUrl) {
+          const filePath = path.join(uploadDir, fileId);
+          if (fs.existsSync(filePath)) {
+            fs.unlinkSync(filePath);
+          }
         }
       }
     } catch (error: any) {
